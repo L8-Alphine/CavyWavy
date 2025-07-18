@@ -1,5 +1,6 @@
 package com.alphine.cavywavy.commands;
 
+import com.alphine.cavywavy.config.CavyOreConfig;
 import com.alphine.cavywavy.network.CavyNetworkHandler;
 import com.alphine.cavywavy.network.PacketRequestOreSync;
 import com.alphine.cavywavy.util.GlowingMarkerManager;
@@ -20,7 +21,7 @@ import java.util.UUID;
 public class CommandCavyAdmin {
 
     // Simple commands...
-    // TODO: Add a reload command for the ores.json file
+
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(Commands.literal("cavy")
@@ -36,6 +37,13 @@ public class CommandCavyAdmin {
                         .then(Commands.literal("placer")
                                 .executes(ctx -> togglePlacerMode(ctx.getSource()))
                         )
+                        .then(Commands.literal("reload")
+                                .executes(ctx -> {
+                                    CavyOreConfig.save();
+                                    CavyOreConfig.reload();
+                                    ctx.getSource().sendSuccess(Component.literal("§aOre File Reloaded."), false);
+                                    return 1;
+                                }))
                 )
         );
     }
