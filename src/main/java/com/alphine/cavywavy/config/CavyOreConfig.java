@@ -16,7 +16,6 @@ import java.util.*;
 
 public class CavyOreConfig {
 
-    // TODO: Need to add a reload method
 
     private static final File CONFIG_FILE = new File("config/cavywavy/ores.json");
     private static final List<WeightedOre> ORE_LIST = new ArrayList<>();
@@ -53,6 +52,23 @@ public class CavyOreConfig {
         } catch (Exception e) {
             Cavywavy.LOGGER.error("[CavyOreConfig] Failed to load ores.json", e);
         }
+    }
+
+    public static void save() {
+        try {
+            CONFIG_FILE.getParentFile().mkdirs();
+            FileWriter writer = new FileWriter(CONFIG_FILE);
+            new Gson().toJson(ORE_LIST, writer);
+            writer.close();
+            Cavywavy.LOGGER.info("[CavyOreConfig] Saved ores.json with {} ores.", ORE_LIST.size());
+        } catch (Exception e) {
+            Cavywavy.LOGGER.error("[CavyOreConfig] Failed to save ores.json", e);
+        }
+    }
+
+    public static void reload() {
+        Cavywavy.LOGGER.info("[CavyOreConfig] Reloading ores.json...");
+        load();
     }
 
     private static void saveDefaultConfig() {
