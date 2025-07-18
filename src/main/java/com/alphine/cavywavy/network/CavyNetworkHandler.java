@@ -24,16 +24,19 @@ public class CavyNetworkHandler {
         CHANNEL.registerMessage(nextId(), PacketOreBroken.class,
                 PacketOreBroken::encode,
                 PacketOreBroken::decode,
-                PacketOreBroken::handle);
+                PacketOreBroken::handle
+        );
 
         CHANNEL.registerMessage(nextId(), PacketShowOre.class,
                 PacketShowOre::encode,
                 PacketShowOre::decode,
-                PacketShowOre::handle);
+                PacketShowOre::handle
+        );
 
         CHANNEL.registerMessage(nextId(), PacketRequestOreSync.class,
                 PacketRequestOreSync::encode,
                 PacketRequestOreSync::decode,
-                PacketRequestOreSync::handle);
+                PacketRequestOreSync::handle
+        );
     }
 }

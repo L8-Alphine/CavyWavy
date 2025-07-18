@@ -32,13 +32,21 @@ public class PacketShowOre {
         return new PacketShowOre(pos, state);
     }
 
-    // Method works... surprisingly
+    // Method to handle the packet on both client and server sides
     public static void handle(PacketShowOre msg, Supplier<net.minecraftforge.network.NetworkEvent.Context> ctx) {
         ctx.get().enqueueWork(() -> {
-            // Server is faking this packet from itself
-            ServerPlayer player = ctx.get().getSender();
-            if (player != null) {
-                player.connection.send(new ClientboundBlockUpdatePacket(msg.pos, msg.blockState));
+            if (ctx.get().getDirection().getReceptionSide().isClient()) {
+                // Client-side handling: Update ONLY the block visually at msg.pos
+                net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+                if (mc.level != null) {
+                    mc.level.setBlock(msg.pos, msg.blockState, 19); // 19 = force client update, no physics
+                }
+            } else {
+                // Server-side handling: Send update to the player
+                ServerPlayer player = ctx.get().getSender();
+                if (player != null) {
+                    player.connection.send(new ClientboundBlockUpdatePacket(msg.pos, msg.blockState));
+                }
             }
         });
         ctx.get().setPacketHandled(true);

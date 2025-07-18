@@ -7,6 +7,7 @@ import com.alphine.cavywavy.instancing.PlayerOreInstance;
 import com.alphine.cavywavy.network.CavyNetworkHandler;
 import com.alphine.cavywavy.network.PacketRequestOreSync;
 import com.alphine.cavywavy.network.PacketShowOre;
+import com.alphine.cavywavy.network.PacketOreBroken;
 import com.alphine.cavywavy.util.OreGeneratorManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
@@ -23,12 +24,16 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
 import net.minecraftforge.event.level.BlockEvent;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.network.NetworkDirection;
+import net.minecraftforge.network.PacketDistributor;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Mod.EventBusSubscriber(modid = Cavywavy.MODID)
 public class ForgeEventHandlers {
@@ -161,6 +166,9 @@ public class ForgeEventHandlers {
         }
     }
 
+    // Set cooldown to 30 seconds
+    public static final long COOLDOWN_TIME_MS = 30000;
+
     @SubscribeEvent
     public void onBlockBreak(BlockEvent.BreakEvent event) {
         Player player = event.getPlayer();
@@ -170,31 +178,110 @@ public class ForgeEventHandlers {
         if (!(level instanceof ServerLevel serverLevel)) return;
 
         if (OreGeneratorManager.isGenerator(pos) && !OreGeneratorManager.isAdmin(player.getUUID())) {
-            event.setCanceled(true); // Don't break real bedrock
+            event.setCanceled(true); // Prevent actual block break
 
-            PlayerOreInstance instance = InstanceManager.getInstance((ServerPlayer) player, pos);
-            if (instance == null) return;
+            // --- Instance timer check ---
+            var instance = InstanceManager.getInstance((ServerPlayer) player, pos);
+            long now = System.currentTimeMillis();
+            if (instance != null && now < instance.getRegenAtMillis()) {
+                player.sendSystemMessage(Component.literal("§cThis generator is on cooldown!"));
+                return;
+            }
 
-            // Give drops only to player
-            List<ItemStack> drops = Block.getDrops(
-                    instance.getOreBlock().defaultBlockState(),
-                    serverLevel, pos, null, player, player.getMainHandItem());
+            // --- DROP LOGIC ---
+            Block oreBlock = OreGeneratorManager.getOreFor(pos);
+            BlockState state = oreBlock.defaultBlockState();
+
+            net.minecraft.world.level.storage.loot.LootContext.Builder builder = new net.minecraft.world.level.storage.loot.LootContext.Builder(serverLevel)
+                    .withParameter(net.minecraft.world.level.storage.loot.parameters.LootContextParams.ORIGIN, net.minecraft.world.phys.Vec3.atCenterOf(pos))
+                    .withParameter(net.minecraft.world.level.storage.loot.parameters.LootContextParams.TOOL, player.getMainHandItem())
+                    .withParameter(net.minecraft.world.level.storage.loot.parameters.LootContextParams.THIS_ENTITY, player)
+                    .withParameter(net.minecraft.world.level.storage.loot.parameters.LootContextParams.BLOCK_STATE, state);
+
+            java.util.List<ItemStack> drops = state.getDrops(builder);
+
+            boolean hasSpace = true;
+            for (ItemStack stack : drops) {
+                if (!player.getInventory().add(stack.copy())) {
+                    hasSpace = false;
+                    break;
+                }
+            }
+
+            if (!hasSpace) {
+                player.sendSystemMessage(Component.literal("§cYou don't have enough inventory space!"));
+                return;
+            }
 
             for (ItemStack stack : drops) {
                 player.getInventory().placeItemBackInInventory(stack);
             }
 
-            // Send fake bedrock back to this player
+            // --- Instantly show bedrock illusion only to this player using packet magic ---
             if (player instanceof ServerPlayer serverPlayer) {
-                serverPlayer.connection.send(new ClientboundBlockUpdatePacket(pos, Blocks.BEDROCK.defaultBlockState()));
+                // Only send for the block that was broken
+                CavyNetworkHandler.CHANNEL.sendTo(
+                    new PacketShowOre(pos, Blocks.BEDROCK.defaultBlockState()),
+                    serverPlayer.connection.connection,
+                    NetworkDirection.PLAY_TO_CLIENT
+                );
             }
 
-            // Schedule new ore regen for this player
-            Block newOre = CavyOreConfig.getRandomOre();
-            OreGeneratorManager.addGenerator(pos, newOre);
-            InstanceManager.setInstance((ServerPlayer) player, pos, newOre, 60_000L);
+            // Add particles for cooldown
+            serverLevel.sendParticles(ParticleTypes.SMOKE,
+                pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                15, 0.3, 0.3, 0.3, 0.01);
+            serverLevel.sendParticles(ParticleTypes.FLAME,
+                pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                5, 0.2, 0.2, 0.2, 0.01);
+
+            // --- REGEN LOGIC ---
+            long regenAt = now + COOLDOWN_TIME_MS;
+            InstanceManager.setInstance((ServerPlayer) player, pos, Blocks.BEDROCK, regenAt);
+
+            // Schedule regen using tick event
+            ForgeEventHandlers.pendingRegens.put(pos.immutable(), new ForgeEventHandlers.RegenTask(serverLevel, pos.immutable(), (ServerPlayer) player, regenAt));
+        }
+    }
+
+    private static final Map<BlockPos, RegenTask> pendingRegens = new HashMap<>();
+
+    private static class RegenTask {
+        public final ServerLevel level;
+        public final BlockPos pos;
+        public final ServerPlayer player;
+        public final long triggerTime;
+
+        public RegenTask(ServerLevel level, BlockPos pos, ServerPlayer player, long triggerTime) {
+            this.level = level;
+            this.pos = pos;
+            this.player = player;
+            this.triggerTime = triggerTime;
+        }
+    }
+
+    @SubscribeEvent
+    public static void onServerTick(TickEvent.ServerTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) return;
+        long now = System.currentTimeMillis();
+        var iterator = pendingRegens.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            RegenTask task = entry.getValue();
+            if (now >= task.triggerTime) {
+                Block newOre = CavyOreConfig.getRandomOre();
+                OreGeneratorManager.addGenerator(task.pos, newOre);
+                InstanceManager.setInstance(task.player, task.pos, newOre, 0); // 0 = can break again
+
+                // Send packet to update block visually for this player only
+                CavyNetworkHandler.CHANNEL.sendTo(
+                    new PacketShowOre(task.pos, newOre.defaultBlockState()),
+                    task.player.connection.connection,
+                    NetworkDirection.PLAY_TO_CLIENT
+                );
+                iterator.remove();
+            }
         }
     }
 
 }
-

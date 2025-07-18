@@ -15,8 +15,11 @@ public class PlayerOreInstance {
         return oreBlock;
     }
 
+    public long getRegenAtMillis() {
+        return regenAtMillis;
+    }
+
     public boolean shouldRegenerate() {
         return System.currentTimeMillis() >= regenAtMillis;
     }
 }
-

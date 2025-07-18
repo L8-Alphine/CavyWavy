@@ -5,7 +5,9 @@ import com.alphine.cavywavy.instancing.InstanceManager;
 import com.alphine.cavywavy.instancing.PlayerOreInstance;
 import com.alphine.cavywavy.util.OreGeneratorManager;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
@@ -45,38 +47,67 @@ public class PacketOreBroken {
             if (player == null) return;
 
             ServerLevel serverLevel = player.getLevel();
+            BlockPos pos = msg.pos;
 
-            PlayerOreInstance instance = InstanceManager.getInstance(player, msg.pos);
-            if (instance == null) return;
+            // Check if this is a valid ore generator position
+            if (!OreGeneratorManager.isGenerator(pos)) return;
+
+            PlayerOreInstance instance = InstanceManager.getInstance(player, pos);
+
+            if (instance == null) {
+                Block currentOre = OreGeneratorManager.getOreFor(pos);
+                instance = new PlayerOreInstance(currentOre, System.currentTimeMillis());
+                InstanceManager.setInstance(player, pos, currentOre, System.currentTimeMillis());
+            }
 
             Block ore = instance.getOreBlock();
             BlockState state = ore.defaultBlockState();
 
             // --- DROP LOGIC ---
             LootContext.Builder builder = new LootContext.Builder(serverLevel)
-                    .withParameter(LootContextParams.ORIGIN, Vec3.atCenterOf(msg.pos))
+                    .withParameter(LootContextParams.ORIGIN, Vec3.atCenterOf(pos))
                     .withParameter(LootContextParams.TOOL, player.getMainHandItem())
                     .withParameter(LootContextParams.THIS_ENTITY, player)
                     .withParameter(LootContextParams.BLOCK_STATE, state);
 
             List<ItemStack> drops = state.getDrops(builder);
+
+            boolean hasSpace = true;
+            for (ItemStack stack : drops) {
+                if (!player.getInventory().add(stack.copy())) {
+                    hasSpace = false;
+                    break;
+                }
+            }
+
+            if (!hasSpace) {
+                player.sendSystemMessage(Component.literal("§cYou don't have enough inventory space!"));
+                return;
+            }
+
             for (ItemStack stack : drops) {
                 player.getInventory().placeItemBackInInventory(stack);
             }
 
-            // --- WORLD BLOCK TO BEDROCK ---
-            serverLevel.setBlockAndUpdate(msg.pos, Blocks.BEDROCK.defaultBlockState());
-
-            // --- VISUAL BEDROCK ILLUSION (optional, for consistency) ---
+            // --- Show bedrock illusion only to this player ---
             CavyNetworkHandler.CHANNEL.send(
-                    PacketDistributor.PLAYER.with(() -> player),
-                    new PacketShowOre(msg.pos, Blocks.BEDROCK.defaultBlockState())
+                PacketDistributor.PLAYER.with(() -> player),
+                new PacketShowOre(pos, Blocks.BEDROCK.defaultBlockState())
             );
+
+            // Add particles for cooldown
+            serverLevel.sendParticles(ParticleTypes.SMOKE,
+                pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                15, 0.3, 0.3, 0.3, 0.01);
+            serverLevel.sendParticles(ParticleTypes.FLAME,
+                pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                5, 0.2, 0.2, 0.2, 0.01);
 
             // --- REGEN LOGIC ---
             Block newOre = CavyOreConfig.getRandomOre();
-            OreGeneratorManager.addGenerator(msg.pos, newOre);
-            InstanceManager.setInstance(player, msg.pos, newOre, 60_000L);
+            OreGeneratorManager.addGenerator(pos, newOre);
+            InstanceManager.setInstance(player, pos, newOre, System.currentTimeMillis() +
+                com.alphine.cavywavy.instancing.RegenScheduler.COOLDOWN_TIME_MS);
         });
 
         ctx.get().setPacketHandled(true);

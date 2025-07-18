@@ -93,3 +93,6 @@ public class InstanceManager {
         }
     }
 }
+
+// Add this to PlayerOreInstance class if not present:
+// public long getRegenAtMillis() { return regenAtMillis; }
