@@ -1,0 +1,5 @@
+[
+  { "id": "minecraft:coal_ore", "weight": 20 },
+  { "id": "mekanism:osmium_ore", "weight": 10 },
+  { "id": "thermal:lead_ore", "weight": 5 }
+]
